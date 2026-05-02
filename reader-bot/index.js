@@ -21,7 +21,8 @@ const CONFIG = {
   backendUrl: process.env.BACKEND_URL || "http://localhost:5012",
   sessionFile: path.join(__dirname, "session.txt"),
   useAI: process.env.USE_AI_CLASSIFIER !== "false",
-  duplicateWindowMs: (parseInt(process.env.DUPLICATE_WINDOW_MINUTES, 10) || 30) * 60 * 1000,
+  duplicateWindowMs:
+    (parseInt(process.env.DUPLICATE_WINDOW_MINUTES, 10) || 30) * 60 * 1000,
 };
 
 // ─── Session boshqaruvi ───────────────────────────────────────────────────────
@@ -78,8 +79,8 @@ const stats = {
 const printStats = () => {
   logger.info(
     `📊 Statistika | Jami: ${stats.total} | Yuborildi: ${stats.sent} | ` +
-    `AI: ${stats.aiUsed} | Filtrlandi: ${stats.excluded} | ` +
-    `Takror: ${stats.duplicates} | Viloyatsiz: ${stats.noRegion} | Xato: ${stats.errors}`
+      `AI: ${stats.aiUsed} | Filtrlandi: ${stats.excluded} | ` +
+      `Takror: ${stats.duplicates} | Viloyatsiz: ${stats.noRegion} | Xato: ${stats.errors}`,
   );
 };
 
@@ -99,7 +100,7 @@ const sendToBackend = async (message, regionKey, regionData, usedAI) => {
         detectedBy: usedAI ? "ai" : "keyword",
         createdAt: new Date().toISOString(),
       },
-      { timeout: 5000 }
+      { timeout: 5000 },
     );
     stats.sent++;
     if (usedAI) stats.aiUsed++;
@@ -138,6 +139,7 @@ const sendToBackend = async (message, regionKey, regionData, usedAI) => {
 const handleMessage = async (event) => {
   try {
     const rawMessage = event.message?.message;
+
     if (!rawMessage?.trim()) return;
 
     stats.total++;
@@ -161,7 +163,12 @@ const handleMessage = async (event) => {
     // 3. Keyword orqali viloyat aniqlash
     const keywordResult = detectRegionByKeyword(normalized);
     if (keywordResult) {
-      await sendToBackend(rawMessage, keywordResult.regionKey, keywordResult.region, false);
+      await sendToBackend(
+        rawMessage,
+        keywordResult.regionKey,
+        keywordResult.region,
+        false,
+      );
       return;
     }
 
@@ -190,15 +197,22 @@ const handleMessage = async (event) => {
 // ─── Asosiy funksiya ──────────────────────────────────────────────────────────
 (async () => {
   if (!CONFIG.apiId || !CONFIG.apiHash) {
-    logger.error("TELEGRAM_API_ID va TELEGRAM_API_HASH .env da bo'lishi shart!");
+    logger.error(
+      "TELEGRAM_API_ID va TELEGRAM_API_HASH .env da bo'lishi shart!",
+    );
     process.exit(1);
   }
 
   const stringSession = new StringSession(loadSession());
-  const client = new TelegramClient(stringSession, CONFIG.apiId, CONFIG.apiHash, {
-    connectionRetries: 5,
-    timeout: 15000,
-  });
+  const client = new TelegramClient(
+    stringSession,
+    CONFIG.apiId,
+    CONFIG.apiHash,
+    {
+      connectionRetries: 5,
+      timeout: 15000,
+    },
+  );
 
   try {
     await client.start({
@@ -210,18 +224,33 @@ const handleMessage = async (event) => {
 
     saveSession(client.session.save());
 
+
+
+    await client.connect();
+await client.getDialogs(); 
+
+    // HAMMA XABARLAR
+    client.addEventHandler((update) => {
+      const msg = update.message;
+      if (!msg?.message) return;
+
+      console.log("📩", msg.message);
+      console.log("💬", update.chatId);
+    });
+
     // Barcha yangi xabarlarni tinglash
     client.addEventHandler(handleMessage, new NewMessage({}));
 
     logger.info("🚀 Reader Bot ishga tushdi");
-    logger.info(`🤖 AI klassifikator: ${CONFIG.useAI ? "YOQILGAN" : "O'CHIRILGAN"}`);
+    logger.info(
+      `🤖 AI klassifikator: ${CONFIG.useAI ? "YOQILGAN" : "O'CHIRILGAN"}`,
+    );
     logger.info(`⏱️ Takror filtri: ${CONFIG.duplicateWindowMs / 60000} daqiqa`);
 
     // Ulanish uzilsa qayta ulanish
     client.addEventHandler(async (update) => {
       // Connection state monitoring — gramjs o'zi qayta ulaydi
     });
-
   } catch (err) {
     logger.error("Bot ishga tushmadi:", err.message);
     process.exit(1);
