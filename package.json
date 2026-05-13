@@ -9,5 +9,4 @@
     "run-front": "cd reader-bot && npm start",
     "start-all": "concurrently \"npm run run-api\" \"npm run run-bot\" \"npm run run-front\""
   }
-
 }
