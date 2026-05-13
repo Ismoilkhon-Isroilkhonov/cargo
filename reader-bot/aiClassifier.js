@@ -63,7 +63,7 @@ const classifyWithAI = async (message) => {
     if (err.response?.status === 429) {
       console.warn("[AI] Rate limit — AI o'tkazib yuborildi");
     } else {
-      console.error("[AI] Xato:", err.message);
+      // console.error("[AI] Xato:", err.message);
     }
     return null;
   }

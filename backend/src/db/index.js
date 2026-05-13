@@ -7,11 +7,6 @@ const pool = new Pool({
   },
 });
 
-pool.on("error", (err) => {
-  console.error("[DB] Kutilmagan xato:", err.message);
-});
-
 module.exports = {
   query: (text, params) => pool.query(text, params),
-  pool,
 };

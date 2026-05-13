@@ -1,0 +1,13 @@
+{
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  
+  "scripts": {
+    "run-api": "cd backend/src  && npm start",
+    "run-bot": "cd sender-bot && npm start",
+    "run-front": "cd reader-bot && npm start",
+    "start-all": "concurrently \"npm run run-api\" \"npm run run-bot\" \"npm run run-front\""
+  }
+
+}
