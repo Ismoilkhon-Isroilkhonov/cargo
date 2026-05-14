@@ -8,7 +8,7 @@ const input = require("input");
 
 const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
-const { NewMessage } = require("telegram/events");
+const { Api } = require("telegram");
 
 const logger = require("./logger");
 const { classifyWithAI } = require("./aiClassifier");
@@ -44,6 +44,23 @@ const saveSession = (session) => {
     logger.error("Session saqlashda xato:", err.message);
   }
 };
+
+// ─── Chat ID normalizatsiya ───────────────────────────────────────────────────
+// Barcha ID larni string formatiga keltiramiz, -100 prefixini olib tashlaymiz
+function normalizeChatId(id) {
+  return String(id).replace(/^-100/, "").replace(/^-/, "");
+}
+
+// ─── CARGO_CHAT_IDS — STRING formatida saqlaymiz ─────────────────────────────
+const CARGO_CHAT_IDS = new Set([
+  "1210236379", // YUK MARKAZI
+  "2182000321", // 🚛YUK MARKAZI🚚
+  "2251329979", // Tezkor Yuk
+  "2456189523", // Yuk fura
+  "2284204348", // isuzu sprinter Gazel yuk
+  "2209710843", // Shafyorlar Gruppasi
+  "2457958196", // Labo sprinter uz
+]);
 
 // ─── Duplicate filter ─────────────────────────────────────────────────────────
 const sentMessages = new Map();
@@ -112,12 +129,11 @@ const sendToBackend = async (message, regionKey, regionData, usedAI) => {
 };
 
 // ─── Core: xabarni qayta ishlash ─────────────────────────────────────────────
-// BIRINCHI KODDAN O'RGANILGAN: entity va msg alohida olinadi
 const processOneMessage = async (entity, msg) => {
   try {
     if (!msg) return;
-    if (msg.out) return; // o'zimiz yuborgan xabar — o'tkazib yuborish
-    if (!msg.message && !msg.media) return; // bo'sh xabar
+    if (msg.out) return; // o'zimiz yuborgan xabar
+    if (!msg.message && !msg.media) return;
 
     const rawText = (msg.message || "").trim();
     if (!rawText || rawText.length < 5) return;
@@ -177,13 +193,12 @@ const processOneMessage = async (entity, msg) => {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 (async () => {
   if (!CONFIG.apiId || !CONFIG.apiHash) {
-    logger.error(
-      "TELEGRAM_API_ID va TELEGRAM_API_HASH .env da bo'lishi shart!",
-    );
+    logger.error("TELEGRAM_API_ID va TELEGRAM_API_HASH kerak!");
     process.exit(1);
   }
 
   const stringSession = new StringSession(loadSession());
+
   const client = new TelegramClient(
     stringSession,
     CONFIG.apiId,
@@ -193,29 +208,43 @@ const processOneMessage = async (entity, msg) => {
       retryDelay: 3000,
       autoReconnect: true,
       timeout: 30000,
+      sequentialUpdates: true,
     },
   );
 
   await client.start({
-    phoneNumber: async () => input.text("📱 Telefon raqam (+998...): "),
-    password: async () => input.text("🔐 2FA parol (bo'sh — Enter): "),
-    phoneCode: async () => input.text("📲 SMS kodni kiriting: "),
-    onError: (err) => logger.error("Ulanish xatosi:", err.message),
+    phoneNumber: async () => input.text("📱 Telefon: "),
+    password: async () => input.text("🔐 2FA: "),
+    phoneCode: async () => input.text("📲 Kod: "),
   });
 
   saveSession(client.session.save());
+
   logger.info("✅ Telegram ga ulandi");
 
-  const CARGO_CHAT_IDS = new Set([
-    1210236379, // YUK MARKAZI
-    2182000321, // 🚛YUK MARKAZI🚚
-    2251329979, // Tezkor Yuk
-    2456189523, // Yuk fura
-    2284204348, // isuzu sprinter Gazel yuk
-    2209710843, // Shafyorlar Gruppasi
-    2457958196, // Labo sprinter uz
-  ]);
+  // ❌ catchUp OLIB TASHLANDI
+  // await client.catchUp();
 
+  // ─────────────────────────────────────────────
+  // CHAT ID NORMALIZE
+  // ─────────────────────────────────────────────
+const normalizeChatId = (id) => {
+  const s = String(id);
+  return s.startsWith("-100") ? s.slice(4) : s;
+};
+  // ─────────────────────────────────────────────
+  // GROUP FILTER
+  // ─────────────────────────────────────────────
+  const CARGO_CHAT_IDS = new Set(
+    [
+      1210236379, 2182000321, 2251329979, 2456189523, 2284204348, 2209710843,
+      2457958196,
+    ].map(String),
+  );
+
+  // ─────────────────────────────────────────────
+  // GET GROUPS
+  // ─────────────────────────────────────────────
   const dialogs = await client.getDialogs({});
   const sourceEntities = [];
 
@@ -223,114 +252,130 @@ const processOneMessage = async (entity, msg) => {
     const entity = dialog.entity;
     if (!entity) continue;
 
-    // Faqat kanal va guruhlar
     if (!entity.broadcast && !entity.megagroup) continue;
 
-    // Faqat CARGO_CHAT_IDS ichidagi guruhlar
-    if (!CARGO_CHAT_IDS.has(Number(entity.id))) continue;
+    const id = normalizeChatId(entity.id);
+
+    if (!CARGO_CHAT_IDS.has(id)) continue;
 
     sourceEntities.push(entity);
+
+    logger.info(`📌 TOPILDI: [${id}] ${entity.title}`);
   }
 
-  logger.info(`🚛 Tanlangan yuk guruhlari: ${sourceEntities.length} ta`);
-  sourceEntities.forEach((e) => {
-    logger.info(`  - [${e.id}] ${e.title || e.username || "nomsiz"}`);
-  });
+  logger.info(`🚛 Guruhlar: ${sourceEntities.length}`);
 
-  // ── Har bir kanaldan oxirgi 5 xabarni o'qish ──────────────────────────────
+  // ─────────────────────────────────────────────
+  // HISTORY LOAD (oxirgi 5 ta)
+  // ─────────────────────────────────────────────
   for (const entity of sourceEntities) {
     try {
       const messages = await client.getMessages(entity, { limit: 5 });
-
-      // console.log(messages);
 
       for (const msg of messages.reverse()) {
         await processOneMessage(entity, msg);
       }
     } catch (err) {
-      logger.error(`History xato [${entity.title}]: ${err.message}`);
+      logger.error(`History error: ${err.message}`);
     }
   }
+
+  // ─────────────────────────────────────────────
+  // REAL-TIME (ENG MUHIM QISM)
+  // ─────────────────────────────────────────────
+  const { NewMessage } = require("telegram/events");
+
+  client.addEventHandler(async (update) => {
+  try {
+    let msg = null;
+
+    // Channel message
+    if (update instanceof Api.UpdateNewChannelMessage) {
+      msg = update.message;
+    }
+
+    // Group/user message
+    if (update instanceof Api.UpdateNewMessage) {
+      msg = update.message;
+    }
+
+    if (!msg) return;
+    if (!msg.message) return;
+    if (msg.out) return;
+
+    const peer = msg.peerId;
+
+    const chatId =
+      peer?.channelId ||
+      peer?.chatId ||
+      peer?.userId;
+
+    if (!chatId) return;
+
+    const normalized = normalizeChatId(chatId);
+
+    if (!CARGO_CHAT_IDS.has(normalized)) return;
+
+    logger.info("🚀 REAL MESSAGE (RAW)");
+
+    logger.info(`📦 Chat ID: ${normalized}`);
+    logger.info(`📝 ${msg.message}`);
+
+    await processOneMessage({ id: normalized }, msg);
+
+  } catch (err) {
+    logger.error("RAW UPDATE ERROR:", err.message);
+  }
+});
+
+  logger.info("🚀 BOT ISHGA TUSHDI (REAL-TIME ACTIVE)");
+
+  // ─────────────────────────────────────────────
+  // OPTIONAL POLLING (agar internet unstable bo‘lsa)
+  // ─────────────────────────────────────────────
+ const lastMsgId = new Map();
+
+// init
+for (const entity of sourceEntities) {
+  try {
+    const msgs = await client.getMessages(entity, { limit: 1 });
+    if (msgs.length) {
+      lastMsgId.set(normalizeChatId(entity.id), msgs[0].id);
+    }
+  } catch {}
+}
+
+setInterval(async () => {
   for (const entity of sourceEntities) {
     try {
-      const messages = await client.getMessages(entity, { limit: 5 });
+      const eid = normalizeChatId(entity.id);
+      const lastId = lastMsgId.get(eid) || 0;
 
-      for (const msg of messages.reverse()) {
+      const msgs = await client.getMessages(entity, {
+        limit: 30,
+        minId: lastId,
+      });
+
+      if (!msgs.length) continue;
+
+      let max = lastId;
+
+      for (const msg of msgs.reverse()) {
         if (!msg.message) continue;
+        if (msg.id <= lastId) continue;
 
-        logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        logger.info(`📦 Chat: ${entity.title || entity.username || entity.id}`);
-        logger.info(`🆔 Chat ID: ${entity.id}`);
-        logger.info(`📝 Xabar: ${msg.message}`);
-        logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      }
-    } catch (err) {
-      logger.error(`History xato [${entity.title}]: ${err.message}`);
-    }
-  }
+        max = Math.max(max, msg.id);
 
-  function normalizeChatId(id) {
-    return String(id).replace("-100", "");
-  }
+        logger.info(`📩 POLL: ${entity.title} -> ${msg.message}`);
 
-  // ── REAL-TIME: BIRINCHI KODDAN O'RGANILGAN USUL ───────────────────────────
-  // event.message → getChat() → entity va msg alohida olinadi
-  // Bu usul BARCHA xabarlarni to'g'ri ushlaydi
- // REAL-TIME yangi xabarlarni ushlash
-client.addEventHandler(
-  async (event) => {
-    try {
-      // Event kelganini tekshirish
-      logger.info("📡 Event qabul qilindi");
-
-      const msg = event.message;
-      if (!msg) {
-        logger.info("❌ event.message yo'q");
-        return;
+        await processOneMessage(entity, msg);
       }
 
-      if (!msg.message) {
-        logger.info("❌ Xabar matni bo'sh");
-        return;
-      }
-
-      // chatId ni event.chatId dan olish (eng ishonchli usul)
-      const rawChatId = String(event.chatId || "");
-      const normalizedChatId = rawChatId.replace("-100", "");
-
-      logger.info(
-        `🔍 Chat ID: ${rawChatId} -> ${normalizedChatId}`
-      );
-
-      // Faqat kerakli yuk guruhlari
-      if (!CARGO_CHAT_IDS.has(normalizedChatId)) {
-        logger.info("⏭️ Bu guruh kuzatilmayapti");
-        return;
-      }
-
-      // Chat ma'lumotini olish
-      const chat = await msg.getChat();
-
-      logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      logger.info("📩 YANGI XABAR");
-      logger.info(`📦 Chat: ${chat?.title || chat?.username || "nomsiz"}`);
-      logger.info(`🆔 Chat ID: ${normalizedChatId}`);
-      logger.info(`📝 Xabar: ${msg.message}`);
-      logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-      // Xabarni qayta ishlash
-      await processOneMessage(chat, msg);
+      lastMsgId.set(eid, max);
 
     } catch (err) {
-      logger.error(`❌ Realtime xato: ${err.stack || err.message}`);
+      logger.debug("poll error", err.message);
     }
-  },
-  new NewMessage({})
-);
-
-logger.info("🚀 Reader Bot ishga tushdi — yuk guruhlaridagi yangi xabarlar tinglanmoqda");
-
-  logger.info("🚀 Reader Bot ishga tushdi — barcha kanallarni tinglayapti");
-  logger.info(`🤖 AI: ${CONFIG.useAI ? "YOQILGAN" : "O'CHIRILGAN"}`);
-  logger.info(`⏱️  Takror filtri: ${CONFIG.duplicateWindowMs / 60000} daqiqa`);
+  }
+}, 3000); // 3 sec (5 ham bo‘ladi)
 })();

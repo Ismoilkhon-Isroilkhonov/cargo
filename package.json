@@ -2,7 +2,6 @@
   "devDependencies": {
     "concurrently": "^9.2.1"
   },
-  
   "scripts": {
     "run-api": "cd backend/src  && npm start",
     "run-bot": "cd sender-bot && npm start",
